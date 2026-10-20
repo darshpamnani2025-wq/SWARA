@@ -1,0 +1,6 @@
+{
+  "name": "Swara — AI vocal coach that will be always with you",
+  "description": "AI vocal coach that will be always with you. Real-time pitch extraction, tuner needle, live AI feedback, and waveform analysis.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

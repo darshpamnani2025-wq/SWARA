@@ -1,0 +1,121 @@
+-- 1. CLEANUP (Drops existing tables and attached triggers safely)
+DROP TABLE IF EXISTS ANALYSIS_LOG CASCADE;
+DROP TABLE IF EXISTS PRACTICE_SESSION CASCADE;
+DROP TABLE IF EXISTS PRACTICE_TRACK CASCADE;
+DROP TABLE IF EXISTS VOCAL_PROFILE CASCADE;
+DROP TABLE IF EXISTS USERS CASCADE;
+
+DROP FUNCTION IF EXISTS analyze_pitch_trigger() CASCADE;
+DROP FUNCTION IF EXISTS calculate_session_final_score(VARCHAR) CASCADE;
+
+-- 2. CREATE TABLES
+CREATE TABLE USERS (
+    User_ID VARCHAR(10) PRIMARY KEY,
+    Name VARCHAR(50) NOT NULL,
+    Email VARCHAR(100) UNIQUE NOT NULL,
+    Experience_Level VARCHAR(20) CHECK (Experience_Level IN ('Beginner', 'Intermediate', 'Advanced'))
+);
+
+CREATE TABLE VOCAL_PROFILE (
+    Profile_ID VARCHAR(10) PRIMARY KEY,
+    User_ID VARCHAR(10) NOT NULL REFERENCES USERS(User_ID) ON DELETE CASCADE,
+    Voice_Type VARCHAR(20),
+    Vocal_Range VARCHAR(20)
+);
+
+CREATE TABLE PRACTICE_TRACK (
+    Track_ID VARCHAR(10) PRIMARY KEY,
+    Title VARCHAR(100) NOT NULL,
+    Artist VARCHAR(50),
+    Difficulty VARCHAR(20) CHECK (Difficulty IN ('Easy', 'Medium', 'Hard'))
+);
+
+CREATE TABLE PRACTICE_SESSION (
+    Session_ID VARCHAR(10) PRIMARY KEY,
+    User_ID VARCHAR(10) NOT NULL REFERENCES USERS(User_ID) ON DELETE CASCADE,
+    Track_ID VARCHAR(10) NOT NULL REFERENCES PRACTICE_TRACK(Track_ID) ON DELETE CASCADE,
+    Session_Date TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    Overall_Score NUMERIC(5,2) DEFAULT 0.00
+);
+
+CREATE TABLE ANALYSIS_LOG (
+    Log_ID VARCHAR(10) PRIMARY KEY,
+    Session_ID VARCHAR(10) NOT NULL REFERENCES PRACTICE_SESSION(Session_ID) ON DELETE CASCADE,
+    Log_Timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    Target_Pitch NUMERIC(6,2) NOT NULL,
+    Actual_Pitch NUMERIC(6,2) NOT NULL,
+    Pitch_Deviation NUMERIC(6,2),
+    AI_Suggestion VARCHAR(200)
+);
+
+-- 3. SECURITY POLICIES (RLS)
+ALTER TABLE USERS ENABLE ROW LEVEL SECURITY;
+ALTER TABLE VOCAL_PROFILE ENABLE ROW LEVEL SECURITY;
+ALTER TABLE PRACTICE_TRACK ENABLE ROW LEVEL SECURITY;
+ALTER TABLE PRACTICE_SESSION ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ANALYSIS_LOG ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public USERS" ON USERS FOR ALL USING (true);
+CREATE POLICY "Public VOCAL_PROFILE" ON VOCAL_PROFILE FOR ALL USING (true);
+CREATE POLICY "Public PRACTICE_TRACK" ON PRACTICE_TRACK FOR ALL USING (true);
+CREATE POLICY "Public PRACTICE_SESSION" ON PRACTICE_SESSION FOR ALL USING (true);
+CREATE POLICY "Public ANALYSIS_LOG" ON ANALYSIS_LOG FOR ALL USING (true);
+
+-- 4. FUNCTIONS AND TRIGGERS
+CREATE OR REPLACE FUNCTION analyze_pitch_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.Pitch_Deviation := ABS(NEW.Target_Pitch - NEW.Actual_Pitch);
+
+    IF NEW.Pitch_Deviation = 0 THEN
+        NEW.AI_Suggestion := 'Pitch Perfect! Hold current note posture.';
+    ELSIF NEW.Actual_Pitch < NEW.Target_Pitch THEN
+        NEW.AI_Suggestion := 'Pitch Flat. Increase breath support and lift soft palate.';
+    ELSE
+        NEW.AI_Suggestion := 'Pitch Sharp. Relax vocal cord tension and lower larynx slightly.';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_analyze_pitch
+BEFORE INSERT ON ANALYSIS_LOG
+FOR EACH ROW
+EXECUTE FUNCTION analyze_pitch_trigger();
+
+CREATE OR REPLACE FUNCTION calculate_session_final_score(p_session_id VARCHAR)
+RETURNS NUMERIC AS $$
+DECLARE
+    v_avg_deviation NUMERIC;
+    v_final_score NUMERIC;
+BEGIN
+    SELECT AVG(Pitch_Deviation)
+    INTO v_avg_deviation
+    FROM ANALYSIS_LOG
+    WHERE Session_ID = p_session_id;
+
+    IF v_avg_deviation IS NOT NULL THEN
+        v_final_score := GREATEST(0, 100 - (v_avg_deviation * 5));
+    ELSE
+        v_final_score := 0;
+    END IF;
+
+    UPDATE PRACTICE_SESSION
+    SET Overall_Score = v_final_score
+    WHERE Session_ID = p_session_id;
+
+    RETURN v_final_score;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 5. TEST DATA
+INSERT INTO USERS VALUES ('U101', 'Mudit Bhatt', 'mudit@example.com', 'Intermediate');
+INSERT INTO VOCAL_PROFILE VALUES ('VP01', 'U101', 'Tenor', 'C3-G5');
+INSERT INTO PRACTICE_TRACK VALUES ('TRK01', 'Vocal Scale Warmup', 'SAWARA Studio', 'Easy');
+INSERT INTO PRACTICE_SESSION (Session_ID, User_ID, Track_ID) VALUES ('SES1001', 'U101', 'TRK01');
+
+INSERT INTO ANALYSIS_LOG (Log_ID, Session_ID, Target_Pitch, Actual_Pitch) 
+VALUES ('LOG001', 'SES1001', 440.00, 435.50);
+
+SELECT * FROM ANALYSIS_LOG;
